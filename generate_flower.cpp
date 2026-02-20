@@ -53,7 +53,9 @@ struct CellLayout {
 
 static bool valid_cell[ROWS][COLS];
 static int cell_r[TOTAL], cell_c[TOTAL];
-static int fill_order[TOTAL];  // fill center 9x9 first, then rest
+static int fill_order[TOTAL];
+static int center_indices[81], top_indices[27], bottom_indices[27], left_indices[27], right_indices[27];
+static int n_center, n_top, n_bottom, n_left, n_right;
 static CellLayout layout[TOTAL];
 
 // Gattai-5 Cross: Center (3-11,3-11), Top (0-8,3-11), Bottom (6-14,3-11), Left (3-11,0-8), Right (3-11,6-14)
@@ -117,6 +119,17 @@ static void init_layout() {
         if (!(r >= 3 && r <= 11 && c >= 3 && c <= 11)) fill_order[o++] = i;
     }
     if (o != TOTAL) abort();
+
+    n_center = n_top = n_bottom = n_left = n_right = 0;
+    for (int i = 0; i < TOTAL; i++) {
+        int r = cell_r[i], c = cell_c[i];
+        if (r >= 3 && r <= 11 && c >= 3 && c <= 11) center_indices[n_center++] = i;
+        else if (r <= 2) top_indices[n_top++] = i;
+        else if (r >= 12) bottom_indices[n_bottom++] = i;
+        else if (c <= 2) left_indices[n_left++] = i;
+        else right_indices[n_right++] = i;
+    }
+    if (n_center != 81 || n_top != 27 || n_bottom != 27 || n_left != 27 || n_right != 27) abort();
 }
 
 mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
@@ -230,82 +243,102 @@ public:
 static int filler_board[ROWS][COLS];
 static int filler_row[NUM_GRIDS][N], filler_col[NUM_GRIDS][N], filler_box[NUM_GRIDS][N];
 
-static bool filler_can_place(int cell_idx, int digit) {
+// Arm-only place (one grid) for two-phase fill
+static bool arm_can_place(int cell_idx, int grid_id, int digit) {
     int bit = 1 << (digit - 1);
     const CellLayout& L = layout[cell_idx];
     for (int i = 0; i < L.n; i++) {
-        int g = L.s[i].g, lr = L.s[i].lr, lc = L.s[i].lc, lb = L.s[i].lb;
-        if (filler_row[g][lr] & bit) return false;
-        if (filler_col[g][lc] & bit) return false;
-        if (filler_box[g][lb] & bit) return false;
+        if (L.s[i].g != grid_id) continue;
+        int lr = L.s[i].lr, lc = L.s[i].lc, lb = L.s[i].lb;
+        if (filler_row[grid_id][lr] & bit) return false;
+        if (filler_col[grid_id][lc] & bit) return false;
+        if (filler_box[grid_id][lb] & bit) return false;
     }
     return true;
 }
-
-static void filler_place(int cell_idx, int digit) {
+static void arm_place(int cell_idx, int grid_id, int digit) {
     int bit = 1 << (digit - 1);
     int r = cell_r[cell_idx], c = cell_c[cell_idx];
     filler_board[r][c] = digit;
     const CellLayout& L = layout[cell_idx];
     for (int i = 0; i < L.n; i++) {
-        int g = L.s[i].g, lr = L.s[i].lr, lc = L.s[i].lc, lb = L.s[i].lb;
-        filler_row[g][lr] |= bit;
-        filler_col[g][lc] |= bit;
-        filler_box[g][lb] |= bit;
+        if (L.s[i].g != grid_id) continue;
+        int lr = L.s[i].lr, lc = L.s[i].lc, lb = L.s[i].lb;
+        filler_row[grid_id][lr] |= bit;
+        filler_col[grid_id][lc] |= bit;
+        filler_box[grid_id][lb] |= bit;
     }
 }
-
-static void filler_unplace(int cell_idx, int digit) {
+static void arm_unplace(int cell_idx, int grid_id, int digit) {
     int bit = 1 << (digit - 1);
     int r = cell_r[cell_idx], c = cell_c[cell_idx];
     filler_board[r][c] = 0;
     const CellLayout& L = layout[cell_idx];
     for (int i = 0; i < L.n; i++) {
-        int g = L.s[i].g, lr = L.s[i].lr, lc = L.s[i].lc, lb = L.s[i].lb;
-        filler_row[g][lr] ^= bit;
-        filler_col[g][lc] ^= bit;
-        filler_box[g][lb] ^= bit;
+        if (L.s[i].g != grid_id) continue;
+        int lr = L.s[i].lr, lc = L.s[i].lc, lb = L.s[i].lb;
+        filler_row[grid_id][lr] ^= bit;
+        filler_col[grid_id][lc] ^= bit;
+        filler_box[grid_id][lb] ^= bit;
     }
 }
 
-static bool fill_recursive(int pos) {
-    if (pos >= TOTAL) return true;
-    int cell_idx = fill_order[pos];
+static bool fill_center_recursive(int pos) {
+    if (pos >= 81) return true;
+    int cell_idx = center_indices[pos];
     vector<int> digits(N);
     iota(digits.begin(), digits.end(), 1);
     shuffle(digits.begin(), digits.end(), rng);
     for (int d : digits) {
-        if (!filler_can_place(cell_idx, d)) continue;
-        filler_place(cell_idx, d);
-        if (fill_recursive(pos + 1)) return true;
-        filler_unplace(cell_idx, d);
+        if (!arm_can_place(cell_idx, 0, d)) continue;
+        arm_place(cell_idx, 0, d);
+        if (fill_center_recursive(pos + 1)) return true;
+        arm_unplace(cell_idx, 0, d);
+    }
+    return false;
+}
+static void sync_center_to_arms() {
+    for (int i = 0; i < 81; i++) {
+        int cell_idx = center_indices[i];
+        int d = filler_board[cell_r[cell_idx]][cell_c[cell_idx]];
+        if (d < 1 || d > N) continue;
+        const CellLayout& L = layout[cell_idx];
+        for (int j = 0; j < L.n; j++) {
+            int g = L.s[j].g, lr = L.s[j].lr, lc = L.s[j].lc, lb = L.s[j].lb;
+            int bit = 1 << (d - 1);
+            filler_row[g][lr] |= bit;
+            filler_col[g][lc] |= bit;
+            filler_box[g][lb] |= bit;
+        }
+    }
+}
+static bool fill_arm_recursive(int* indices, int count, int grid_id, int pos) {
+    if (pos >= count) return true;
+    int cell_idx = indices[pos];
+    vector<int> digits(N);
+    iota(digits.begin(), digits.end(), 1);
+    shuffle(digits.begin(), digits.end(), rng);
+    for (int d : digits) {
+        if (!arm_can_place(cell_idx, grid_id, d)) continue;
+        arm_place(cell_idx, grid_id, d);
+        if (fill_arm_recursive(indices, count, grid_id, pos + 1)) return true;
+        arm_unplace(cell_idx, grid_id, d);
     }
     return false;
 }
 
+// 24 arm orders: try all permutations of (top=1, bottom=2, left=3, right=4)
+static const int ARM_ORDERS[24][4] = {
+    {1,2,3,4},{1,2,4,3},{1,3,2,4},{1,3,4,2},{1,4,2,3},{1,4,3,2},
+    {2,1,3,4},{2,1,4,3},{2,3,1,4},{2,3,4,1},{2,4,1,3},{2,4,3,1},
+    {3,1,2,4},{3,1,4,2},{3,2,1,4},{3,2,4,1},{3,4,1,2},{3,4,2,1},
+    {4,1,2,3},{4,1,3,2},{4,2,1,3},{4,2,3,1},{4,3,1,2},{4,3,2,1}
+};
+static int* arm_ptrs[4] = { top_indices, bottom_indices, left_indices, right_indices };
+static int arm_counts[4] = { 27, 27, 27, 27 };
+
 static void generate_full_solution(int out[ROWS][COLS]) {
-    memset(filler_board, 0, sizeof(filler_board));
-    for (int r = 0; r < ROWS; r++)
-        for (int c = 0; c < COLS; c++)
-            if (!valid_cell[r][c]) filler_board[r][c] = -1;
-    memset(filler_row, 0, sizeof(filler_row));
-    memset(filler_col, 0, sizeof(filler_col));
-    memset(filler_box, 0, sizeof(filler_box));
-    for (int attempt = 0; attempt < 50; attempt++) {
-        if (attempt > 0) {
-            int o = 0;
-            for (int i = 0; i < TOTAL; i++)
-                if (cell_r[i] >= 3 && cell_r[i] <= 11 && cell_c[i] >= 3 && cell_c[i] <= 11)
-                    fill_order[o++] = i;
-            for (int i = 0; i < TOTAL; i++)
-                if (!(cell_r[i] >= 3 && cell_r[i] <= 11 && cell_c[i] >= 3 && cell_c[i] <= 11))
-                    fill_order[o++] = i;
-        }
-        if (fill_recursive(0)) break;
-        if (attempt == 49) {
-            cerr << "Filler failed after 50 attempts.\n";
-            abort();
-        }
+    for (int outer = 0; outer < 80; outer++) {
         memset(filler_board, 0, sizeof(filler_board));
         for (int r = 0; r < ROWS; r++)
             for (int c = 0; c < COLS; c++)
@@ -313,9 +346,51 @@ static void generate_full_solution(int out[ROWS][COLS]) {
         memset(filler_row, 0, sizeof(filler_row));
         memset(filler_col, 0, sizeof(filler_col));
         memset(filler_box, 0, sizeof(filler_box));
+
+        for (int attempt = 0; attempt < 15; attempt++) {
+            if (fill_center_recursive(0)) break;
+            if (attempt == 14) goto next_center;
+            memset(filler_row[0], 0, sizeof(filler_row[0]));
+            memset(filler_col[0], 0, sizeof(filler_col[0]));
+            memset(filler_box[0], 0, sizeof(filler_box[0]));
+        }
+        sync_center_to_arms();
+
+        for (int order = 0; order < 24; order++) {
+            bool ok = true;
+            for (int a = 0; a < 4 && ok; a++) {
+                int g = ARM_ORDERS[order][a];
+                if (!fill_arm_recursive(arm_ptrs[g-1], arm_counts[g-1], g, 0)) ok = false;
+            }
+            if (ok) {
+                for (int r = 0; r < ROWS; r++)
+                    for (int c = 0; c < COLS; c++) out[r][c] = filler_board[r][c];
+                return;
+            }
+            memset(filler_row[1], 0, sizeof(filler_row[1]));
+            memset(filler_row[2], 0, sizeof(filler_row[2]));
+            memset(filler_row[3], 0, sizeof(filler_row[3]));
+            memset(filler_row[4], 0, sizeof(filler_row[4]));
+            memset(filler_col[1], 0, sizeof(filler_col[1]));
+            memset(filler_col[2], 0, sizeof(filler_col[2]));
+            memset(filler_col[3], 0, sizeof(filler_col[3]));
+            memset(filler_col[4], 0, sizeof(filler_col[4]));
+            memset(filler_box[1], 0, sizeof(filler_box[1]));
+            memset(filler_box[2], 0, sizeof(filler_box[2]));
+            memset(filler_box[3], 0, sizeof(filler_box[3]));
+            memset(filler_box[4], 0, sizeof(filler_box[4]));
+            for (int i = 0; i < 27; i++) {
+                filler_board[cell_r[top_indices[i]]][cell_c[top_indices[i]]] = 0;
+                filler_board[cell_r[bottom_indices[i]]][cell_c[bottom_indices[i]]] = 0;
+                filler_board[cell_r[left_indices[i]]][cell_c[left_indices[i]]] = 0;
+                filler_board[cell_r[right_indices[i]]][cell_c[right_indices[i]]] = 0;
+            }
+            sync_center_to_arms();
+        }
+        next_center: ;
     }
-    for (int r = 0; r < ROWS; r++)
-        for (int c = 0; c < COLS; c++) out[r][c] = filler_board[r][c];
+    cerr << "Full solution failed.\n";
+    abort();
 }
 
 // ============================================================================
