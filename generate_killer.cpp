@@ -2,7 +2,7 @@
  * generate_killer.cpp
  * High-performance Killer Sudoku Generator
  *
- * Compile with: g++ -O3 -o generate_killer generate_killer.cpp
+ * Compile with: g++ -std=c++17 -O3 -o generate_killer generate_killer.cpp
  * Run with: ./generate_killer --count 5
  */
 
@@ -43,11 +43,11 @@ struct Difficulty {
 };
 
 map<int, Difficulty> DIFFICULTY_LEVELS = {
-    {1, {"Beginner", 2, 4, 2.5}},
+    {1, {"Beginner", 2, 3, 2.5}},
     {2, {"Easy",     2, 4, 2.8}},
     {3, {"Medium",   2, 4, 3.0}},
     {4, {"Hard",     2, 4, 3.2}},
-    {5, {"Expert",   2, 4, 3.5}}
+    {5, {"Expert",   2, 5, 3.5}}
 };
 
 // Random engine
@@ -102,6 +102,9 @@ class KillerSolver {
     
     int solutions;
     int num_cages;
+    chrono::steady_clock::time_point deadline_;
+    bool use_deadline_;
+    long long nodes_;
 
     inline int popcnt(int x) {
         return __builtin_popcount(x);
@@ -113,6 +116,16 @@ class KillerSolver {
 
     void solve_recursive() {
         if (solutions >= 2) return;
+        nodes_++;
+        // Wall-clock timeout: check every call so we cannot hang even if node count is wrong
+        if (use_deadline_ && chrono::steady_clock::now() >= deadline_) {
+            solutions = 2;
+            return;
+        }
+        if (use_deadline_ && (nodes_ % 100 == 0) && chrono::steady_clock::now() >= deadline_) {
+            solutions = 2;
+            return;
+        }
 
         // Dynamic MRV
         int best = -1, best_cnt = 100;
@@ -144,7 +157,7 @@ class KillerSolver {
         while (avail) {
             int bit = avail & (-avail);
             avail ^= bit;
-            int digit = ctz(bit); // 1..9 based on bit position
+            int digit = ctz(bit);  // 0..8 (value 1..9)
 
             int np = cage_partial[ci] + digit;
             int nu = cage_unfilled[ci] - 1;
@@ -158,7 +171,7 @@ class KillerSolver {
                 // Min possible sum for 'nu' remaining digits is 1+2+...+nu? 
                 // No, distinct digits constraint is handled by mask, but we can do a simple range check
                 // Actually, just checking if rem is possible is complex, simple check:
-                if (rem < (nu * (nu + 1)) / 2) continue; // Basic min sum check
+                if (rem < (nu * (nu - 1)) / 2) continue;  // Min 0-indexed sum for nu digits
             }
 
             row_used[r] |= bit;
@@ -183,8 +196,12 @@ class KillerSolver {
     }
 
 public:
-    bool has_unique_solution(const vector<Cage>& cages) {
+    bool has_unique_solution(const vector<Cage>& cages, double timeout_sec = 0) {
         num_cages = cages.size();
+        nodes_ = 0;
+        use_deadline_ = (timeout_sec > 0);
+        if (use_deadline_)
+            deadline_ = chrono::steady_clock::now() + chrono::duration_cast<chrono::steady_clock::duration>(chrono::duration<double>(timeout_sec));
         memset(cell_allowed, 0, sizeof(cell_allowed));
         memset(cell_cage, 0, sizeof(cell_cage));
         memset(cage_partial, 0, sizeof(cage_partial));
@@ -192,18 +209,19 @@ public:
 
         for (int ci = 0; ci < num_cages; ci++) {
             int sz = cages[ci].cells.size();
-            int sm = cages[ci].sum;
-            cage_sum[ci] = sm;
+            int sm = cages[ci].sum;  // 1-indexed
+            cage_sum[ci] = sm - sz;   // 0-indexed target for solver
             cage_unfilled[ci] = sz;
 
             int mask_union = 0;
-            // Precompute valid combos for this cage
+            // Precompute valid combos: digits 1..9 stored as bits 0..8, so 0-indexed sum = sm - sz
+            int target_0 = sm - (int)sz;
             if (sz == 1) {
-                if (sm >= 1 && sm <= 9) mask_union = 1 << sm;
-            } else {
+                if (sm >= 1 && sm <= 9) mask_union = 1 << (sm - 1);
+            } else if (target_0 >= 0) {
                 int start = (1 << sz) - 1;
-                for (int s = start; s < (1 << 10); ) {
-                    if ((s & 1) == 0 && popcnt(s) == sz) {
+                for (int s = start; s < (1 << 9); ) {
+                    if (popcnt(s) == sz) {
                         int sum_val = 0;
                         int tmp = s;
                         while (tmp) {
@@ -211,7 +229,7 @@ public:
                             sum_val += ctz(b);
                             tmp ^= b;
                         }
-                        if (sum_val == sm) mask_union |= s;
+                        if (sum_val == target_0) mask_union |= s;
                     }
                     int c2 = s & (-s);
                     int r2 = s + c2;
@@ -237,6 +255,11 @@ public:
         return solutions == 1;
     }
 };
+
+const double SOLVER_TIMEOUT_SEC = 2.0;
+const int PHASE2_MAX_ITERATIONS = 3;
+const int PHASE2_MAX_NEIGHBOR_TRIES = 8;   // per undersized cage per iteration
+const double CAGES_TIMEOUT_SEC = 20.0;     // max time per generate_cages call
 
 KillerSolver solver;
 
@@ -300,9 +323,12 @@ vector<Cage> cages_from_uf(UnionFind& uf, const vector<vector<int>>& board) {
     return cages;
 }
 
-vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
+vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty,
+                             chrono::steady_clock::time_point deadline = chrono::steady_clock::time_point::max()) {
+    cout << "[gc]" << flush;
     Difficulty info = DIFFICULTY_LEVELS[difficulty];
     int target_count = max((int)(TOTAL_CELLS / info.target_avg), 9);
+    auto now = []() { return chrono::steady_clock::now(); };
     
     // Edges
     vector<pair<int, int>> edges;
@@ -316,8 +342,12 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
 
     UnionFind uf(TOTAL_CELLS);
     
-    // Phase 1: Merge iteratively
-    for (int round = 0; round < 20; round++) {
+    // Phase 1: Merge iteratively (bounded rounds + total solver calls to avoid long stalls)
+    const int max_rounds = 8;
+    const int phase1_max_solver_calls = 55;  // total across all rounds per attempt
+    int phase1_solver_calls_total = 0;
+    for (int round = 0; round < max_rounds; round++) {
+        if (phase1_solver_calls_total >= phase1_max_solver_calls) break;
         // Shuffle first to ensure randomness among equal-sized merges
         shuffle(edges.begin(), edges.end(), rng);
         
@@ -341,8 +371,9 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
         int current_cages = 0;
         for(int i=0; i<TOTAL_CELLS; ++i) if(uf.parent[i] == i) current_cages++;
         if (current_cages <= target_count) break;
+        if (now() >= deadline) return {};
 
-        cout << "Round " << round << ": " << current_cages << " cages. Target: " << target_count << endl;
+        cout << "Round " << round << ": " << current_cages << " cages. Target: " << target_count << flush;
 
         bool progress = false;
         
@@ -352,9 +383,12 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
         
         int merges_tried = 0;
         int merges_success = 0;
+        int solver_calls_this_round = 0;
+        const int max_solver_calls_per_round = 35;  // hard cap per round so no round runs 80+ solver calls
         
         for (auto& edge : edges) {
             if (current_cages <= target_count) break;
+            if (solver_calls_this_round >= max_solver_calls_per_round) break;
             
             int u = edge.first;
             int v = edge.second;
@@ -401,8 +435,6 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
             }
             
             // Even more aggressive: if size <= 3, skip check always.
-            // Size 3 cages (e.g. sum 6 -> 1,2,3) are very strong.
-            // The risk is low.
             if (uf.size[root_u] <= 3) {
                  current_cages--;
                  progress = true;
@@ -410,8 +442,18 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
                  continue;
             }
 
+            if (now() >= deadline) {
+                uf.parent[root_v] = old_parent_v;
+                uf.size[root_u] = old_size_u;
+                cout << "\n  (timeout)\n";
+                return {};
+            }
+            if (phase1_solver_calls_total >= phase1_max_solver_calls) break;
+            phase1_solver_calls_total++;
+            solver_calls_this_round++;
+            cout << "." << flush;
             vector<Cage> test_cages = cages_from_uf(uf, board);
-            if (solver.has_unique_solution(test_cages)) {
+            if (solver.has_unique_solution(test_cages, SOLVER_TIMEOUT_SEC)) {
                 current_cages--;
                 progress = true;
                 merges_success++;
@@ -421,20 +463,22 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
                 uf.size[root_u] = old_size_u;
             }
         }
-        cout << "  Tried: " << merges_tried << ", Success: " << merges_success << endl;
+        cout << "\n  Tried: " << merges_tried << ", Success: " << merges_success << endl;
         if (!progress && max_merge_size >= info.max_cage) break;
     }
 
-    // Phase 2: Force merge undersized cages
+    // Phase 2: Force merge undersized cages (capped iterations to avoid stall)
+    cout << "[P2]" << flush;
     bool changed = true;
-    while (changed) {
+    for (int phase2_iter = 0; phase2_iter < PHASE2_MAX_ITERATIONS && changed; phase2_iter++) {
+        if (now() >= deadline) return {};
+        cout << "P2-" << phase2_iter << " " << flush;
         changed = false;
         for (int i = 0; i < TOTAL_CELLS; i++) {
+            if (now() >= deadline) return {};
             int root = uf.find(i);
             if (uf.parent[i] == i && uf.size[root] < info.min_cage) {
-                // Find neighbor to merge
                 vector<int> neighbors;
-                // Scan all cells in this cage to find neighbors
                 for(int k=0; k<TOTAL_CELLS; ++k) {
                     if(uf.find(k) == root) {
                         int r = k/9, c = k%9;
@@ -450,19 +494,19 @@ vector<Cage> generate_cages(const vector<vector<int>>& board, int difficulty) {
                         }
                     }
                 }
-                
                 shuffle(neighbors.begin(), neighbors.end(), rng);
+                int phase2_tries = 0;
                 for(int nb_idx : neighbors) {
+                    if (phase2_tries++ >= PHASE2_MAX_NEIGHBOR_TRIES) break;
+                    if (now() >= deadline) return {};
                     int nb_root = uf.find(nb_idx);
-                    if (uf.size[root] + uf.size[nb_root] > info.max_cage + 1) continue; // Allow slightly larger if forcing
-                    
+                    if (uf.size[root] + uf.size[nb_root] > info.max_cage + 1) continue;
                     int old_parent = uf.parent[nb_root];
                     int old_size = uf.size[root];
-                    
                     uf.parent[nb_root] = root;
                     uf.size[root] += uf.size[nb_root];
-                    
-                    if (solver.has_unique_solution(cages_from_uf(uf, board))) {
+                    cout << "p" << flush;
+                    if (solver.has_unique_solution(cages_from_uf(uf, board), SOLVER_TIMEOUT_SEC)) {
                         changed = true;
                         goto next_cage;
                     } else {
@@ -550,10 +594,13 @@ int main(int argc, char* argv[]) {
             
             while (true) {
                 attempts++;
-                if (attempts % 10 == 0) cout << "." << flush;
-                
+                cout << "\n  #" << (global_id) << " attempt " << attempts << " " << flush;
+                auto puzzle_deadline = chrono::steady_clock::now() + chrono::duration_cast<chrono::steady_clock::duration>(chrono::duration<double>(CAGES_TIMEOUT_SEC));
+                cout << "[board] " << flush;
                 auto board = generate_full_board();
-                auto cages = generate_cages(board, level);
+                cout << "[board-ok] " << flush;
+                cout << "[cages] " << flush;
+                auto cages = generate_cages(board, level, puzzle_deadline);
                 
                 if (!cages.empty()) {
                     if (!first) out << ",\n";
