@@ -1,10 +1,11 @@
 /*
  * generate_samurai.cpp
- * Samurai Sudoku Generator (5 overlapping 9x9 grids, 369 cells)
- * Output: 21x21 grid; -1 = no cell, 0 = empty, 1-9 = value.
+ * Samurai Sudoku Generator: 4x4 (8x8, 64 cells) or 9x9 (21x21, 369 cells) mode.
+ * Output: grid with -1 = no cell, 0 = empty, 1-N = value.
  *
  * Compile: g++ -std=c++17 -O3 -o generate_samurai generate_samurai.cpp
- * Run: ./generate_samurai --count N
+ * Run: ./generate_samurai --size 9 --count N   (default size 9)
+ *      ./generate_samurai --size 4 --count N
  */
 
 #include <iostream>
@@ -22,23 +23,22 @@
 using namespace std;
 
 // ============================================================================
-// Constants & Layout
+// Constants & Layout (max dimensions; actual size set at runtime by --size)
 // ============================================================================
 
-const int SAMURAI_ROWS = 21;
-const int SAMURAI_COLS = 21;
-const int TOTAL_CELLS = 369;
-const int N = 9;
+const int MAX_ROWS = 21;
+const int MAX_COLS = 21;
+const int MAX_CELLS = 369;
 const int NUM_GRIDS = 5;
-const char* OUTPUT_FILE = "sudoku_samurai.json";
+const int MAX_N = 9;
 
 struct Difficulty {
     string name;
     int target_clues;
 };
 
-// 7 difficulty levels (target clue count out of 369)
-map<int, Difficulty> DIFFICULTY_LEVELS = {
+// N=9: 7 levels, 369 cells
+static map<int, Difficulty> DIFFICULTY_9 = {
     {1, {"Beginner",     320}},
     {2, {"Easy",         300}},
     {3, {"Medium",       280}},
@@ -48,18 +48,32 @@ map<int, Difficulty> DIFFICULTY_LEVELS = {
     {7, {"Evil",         200}}
 };
 
-// For each of 369 cells: which grid(s) it belongs to and local row/col/box per grid
+// N=4: 3 levels, 64 cells
+static map<int, Difficulty> DIFFICULTY_4 = {
+    {1, {"Easy",   55}},
+    {2, {"Medium", 50}},
+    {3, {"Hard",   45}}
+};
+
 struct Slot { int g, lr, lc, lb; };
 struct CellLayout {
     int n;
     Slot s[2];
 };
 
-static bool valid_cell[SAMURAI_ROWS][SAMURAI_COLS];
-static int cell_r[TOTAL_CELLS], cell_c[TOTAL_CELLS];
-static CellLayout layout[TOTAL_CELLS];
+// Runtime size (set in main from --size 4 or 9)
+static int g_N = 9;
+static int g_ROWS = 21;
+static int g_COLS = 21;
+static int g_TOTAL = 369;
+static const char* g_OUTPUT = "sudoku_samurai.json";
+static map<int, Difficulty>* g_DIFFICULTY = &DIFFICULTY_9;
 
-static void init_layout() {
+static bool valid_cell[MAX_ROWS][MAX_COLS];
+static int cell_r[MAX_CELLS], cell_c[MAX_CELLS];
+static CellLayout layout[MAX_CELLS];
+
+static void init_layout_9() {
     memset(valid_cell, 0, sizeof(valid_cell));
     for (int r = 0; r <= 8; r++)
         for (int c = 0; c <= 8; c++) valid_cell[r][c] = true;
@@ -73,8 +87,8 @@ static void init_layout() {
         for (int c = 12; c <= 20; c++) valid_cell[r][c] = true;
 
     int idx = 0;
-    for (int r = 0; r < SAMURAI_ROWS; r++) {
-        for (int c = 0; c < SAMURAI_COLS; c++) {
+    for (int r = 0; r < g_ROWS; r++) {
+        for (int c = 0; c < g_COLS; c++) {
             if (!valid_cell[r][c]) continue;
             cell_r[idx] = r;
             cell_c[idx] = c;
@@ -97,7 +111,50 @@ static void init_layout() {
             idx++;
         }
     }
-    if (idx != TOTAL_CELLS) abort();
+    if (idx != g_TOTAL) abort();
+}
+
+// 4x4 Samurai: 8x8 grid, 64 cells, 5 grids with 2x2 overlaps
+static void init_layout_4() {
+    memset(valid_cell, 0, sizeof(valid_cell));
+    for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++) valid_cell[r][c] = true;
+
+    int idx = 0;
+    for (int r = 0; r < 8; r++) {
+        for (int c = 0; c < 8; c++) {
+            cell_r[idx] = r;
+            cell_c[idx] = c;
+            layout[idx].n = 0;
+            // Grid 0: top-left (0-3, 0-3)
+            if (r >= 0 && r <= 3 && c >= 0 && c <= 3) {
+                layout[idx].s[layout[idx].n++] = {0, r, c, (r/2)*2 + c/2};
+            }
+            // Grid 1: top-right (0-3, 4-7)
+            if (r >= 0 && r <= 3 && c >= 4 && c <= 7) {
+                layout[idx].s[layout[idx].n++] = {1, r, c-4, (r/2)*2 + (c-4)/2};
+            }
+            // Grid 2: center (2-5, 2-5)
+            if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
+                layout[idx].s[layout[idx].n++] = {2, r-2, c-2, ((r-2)/2)*2 + (c-2)/2};
+            }
+            // Grid 3: bottom-left (4-7, 0-3)
+            if (r >= 4 && r <= 7 && c >= 0 && c <= 3) {
+                layout[idx].s[layout[idx].n++] = {3, r-4, c, ((r-4)/2)*2 + c/2};
+            }
+            // Grid 4: bottom-right (4-7, 4-7)
+            if (r >= 4 && r <= 7 && c >= 4 && c <= 7) {
+                layout[idx].s[layout[idx].n++] = {4, r-4, c-4, ((r-4)/2)*2 + (c-4)/2};
+            }
+            idx++;
+        }
+    }
+    if (idx != 64) abort();
+}
+
+static void init_layout() {
+    if (g_N == 9) init_layout_9();
+    else init_layout_4();
 }
 
 mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
@@ -107,10 +164,10 @@ mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
 // ============================================================================
 
 class SamuraiSolver {
-    int board[SAMURAI_ROWS][SAMURAI_COLS];
-    int row_used[NUM_GRIDS][N];
-    int col_used[NUM_GRIDS][N];
-    int box_used[NUM_GRIDS][N];
+    int board[MAX_ROWS][MAX_COLS];
+    int row_used[NUM_GRIDS][MAX_N];
+    int col_used[NUM_GRIDS][MAX_N];
+    int box_used[NUM_GRIDS][MAX_N];
     int solutions;
     chrono::steady_clock::time_point deadline_;
     bool use_deadline_;
@@ -158,15 +215,15 @@ class SamuraiSolver {
             return;
         }
 
-        while (cell_idx < TOTAL_CELLS && board[cell_r[cell_idx]][cell_c[cell_idx]] != 0)
+        while (cell_idx < g_TOTAL && board[cell_r[cell_idx]][cell_c[cell_idx]] != 0)
             cell_idx++;
-        if (cell_idx >= TOTAL_CELLS) {
+        if (cell_idx >= g_TOTAL) {
             solutions++;
             return;
         }
 
         int r = cell_r[cell_idx], c = cell_c[cell_idx];
-        for (int d = 1; d <= 9; d++) {
+        for (int d = 1; d <= g_N; d++) {
             if (!can_place(cell_idx, d)) continue;
             board[r][c] = d;
             place(cell_idx, d);
@@ -180,15 +237,16 @@ class SamuraiSolver {
 public:
     SamuraiSolver() { memset(board, 0, sizeof(board)); }
 
-    void load(const int b[SAMURAI_ROWS][SAMURAI_COLS]) {
-        memcpy(board, b, sizeof(board));
+    void load(const int b[MAX_ROWS][MAX_COLS]) {
+        for (int r = 0; r < g_ROWS; r++)
+            for (int c = 0; c < g_COLS; c++) board[r][c] = b[r][c];
         memset(row_used, 0, sizeof(row_used));
         memset(col_used, 0, sizeof(col_used));
         memset(box_used, 0, sizeof(box_used));
-        for (int i = 0; i < TOTAL_CELLS; i++) {
+        for (int i = 0; i < g_TOTAL; i++) {
             int r = cell_r[i], c = cell_c[i];
             int v = board[r][c];
-            if (v >= 1 && v <= 9) place(i, v);
+            if (v >= 1 && v <= g_N) place(i, v);
         }
     }
 
@@ -217,8 +275,8 @@ public:
 // Full grid filler (backtracking, random digit order)
 // ============================================================================
 
-static int filler_board[SAMURAI_ROWS][SAMURAI_COLS];
-static int filler_row[NUM_GRIDS][N], filler_col[NUM_GRIDS][N], filler_box[NUM_GRIDS][N];
+static int filler_board[MAX_ROWS][MAX_COLS];
+static int filler_row[NUM_GRIDS][MAX_N], filler_col[NUM_GRIDS][MAX_N], filler_box[NUM_GRIDS][MAX_N];
 
 static bool filler_can_place(int cell_idx, int digit) {
     int bit = 1 << (digit - 1);
@@ -259,9 +317,9 @@ static void filler_unplace(int cell_idx, int digit) {
 }
 
 static bool fill_recursive(int cell_idx) {
-    if (cell_idx >= TOTAL_CELLS) return true;
+    if (cell_idx >= g_TOTAL) return true;
     int r = cell_r[cell_idx], c = cell_c[cell_idx];
-    vector<int> digits(9);
+    vector<int> digits(g_N);
     iota(digits.begin(), digits.end(), 1);
     shuffle(digits.begin(), digits.end(), rng);
     for (int d : digits) {
@@ -273,16 +331,17 @@ static bool fill_recursive(int cell_idx) {
     return false;
 }
 
-static void generate_full_solution(int out[SAMURAI_ROWS][SAMURAI_COLS]) {
+static void generate_full_solution(int out[MAX_ROWS][MAX_COLS]) {
     memset(filler_board, 0, sizeof(filler_board));
-    for (int r = 0; r < SAMURAI_ROWS; r++)
-        for (int c = 0; c < SAMURAI_COLS; c++)
+    for (int r = 0; r < g_ROWS; r++)
+        for (int c = 0; c < g_COLS; c++)
             if (!valid_cell[r][c]) filler_board[r][c] = -1;
     memset(filler_row, 0, sizeof(filler_row));
     memset(filler_col, 0, sizeof(filler_col));
     memset(filler_box, 0, sizeof(filler_box));
     fill_recursive(0);
-    memcpy(out, filler_board, sizeof(filler_board));
+    for (int r = 0; r < g_ROWS; r++)
+        for (int c = 0; c < g_COLS; c++) out[r][c] = filler_board[r][c];
 }
 
 // ============================================================================
@@ -291,18 +350,19 @@ static void generate_full_solution(int out[SAMURAI_ROWS][SAMURAI_COLS]) {
 
 const double SOLVER_TIMEOUT_SEC = 5.0;
 
-static void create_puzzle(const int solution[SAMURAI_ROWS][SAMURAI_COLS],
-                          int puzzle[SAMURAI_ROWS][SAMURAI_COLS],
+static void create_puzzle(const int solution[MAX_ROWS][MAX_COLS],
+                          int puzzle[MAX_ROWS][MAX_COLS],
                           int difficulty) {
-    memcpy(puzzle, solution, sizeof(int) * SAMURAI_ROWS * SAMURAI_COLS);
-    int target_clues = DIFFICULTY_LEVELS[difficulty].target_clues;
+    for (int r = 0; r < g_ROWS; r++)
+        for (int c = 0; c < g_COLS; c++) puzzle[r][c] = solution[r][c];
+    int target_clues = (*g_DIFFICULTY)[difficulty].target_clues;
 
-    vector<int> indices(TOTAL_CELLS);
+    vector<int> indices(g_TOTAL);
     iota(indices.begin(), indices.end(), 0);
     shuffle(indices.begin(), indices.end(), rng);
 
     SamuraiSolver solver;
-    int clues = TOTAL_CELLS;
+    int clues = g_TOTAL;
     for (int i : indices) {
         if (clues <= target_clues) break;
         int r = cell_r[i], c = cell_c[i];
@@ -319,19 +379,19 @@ static void create_puzzle(const int solution[SAMURAI_ROWS][SAMURAI_COLS],
 }
 
 // ============================================================================
-// JSON output (21x21: -1 = no cell, 0 = empty, 1-9 = value)
+// JSON output (-1 = no cell, 0 = empty, 1-N = value)
 // ============================================================================
 
-static string board_to_json(const int b[SAMURAI_ROWS][SAMURAI_COLS]) {
+static string board_to_json(const int b[MAX_ROWS][MAX_COLS]) {
     string s = "[";
-    for (int i = 0; i < SAMURAI_ROWS; i++) {
+    for (int i = 0; i < g_ROWS; i++) {
         s += "[";
-        for (int j = 0; j < SAMURAI_COLS; j++) {
+        for (int j = 0; j < g_COLS; j++) {
             s += to_string(b[i][j]);
-            if (j < SAMURAI_COLS - 1) s += ",";
+            if (j < g_COLS - 1) s += ",";
         }
         s += "]";
-        if (i < SAMURAI_ROWS - 1) s += ",";
+        if (i < g_ROWS - 1) s += ",";
     }
     s += "]";
     return s;
@@ -343,23 +403,48 @@ static string board_to_json(const int b[SAMURAI_ROWS][SAMURAI_COLS]) {
 
 int main(int argc, char* argv[]) {
     int count_per_level = 1;
-    if (argc == 3 && string(argv[1]) == "--count") {
-        count_per_level = stoi(argv[2]);
-    } else {
-        cout << "Usage: ./generate_samurai --count N" << endl;
+    int size = 9;
+    for (int i = 1; i < argc; i++) {
+        if (string(argv[i]) == "--count" && i + 1 < argc) {
+            count_per_level = stoi(argv[++i]);
+        } else if (string(argv[i]) == "--size" && i + 1 < argc) {
+            size = stoi(argv[++i]);
+        }
+    }
+    if (size != 4 && size != 9) {
+        cout << "Usage: ./generate_samurai [--size 4|9] [--count N]" << endl;
+        cout << "  --size 4: 4x4 Samurai (8x8 grid, 64 cells), 3 difficulty levels" << endl;
+        cout << "  --size 9: 9x9 Samurai (21x21 grid, 369 cells), 7 difficulty levels (default)" << endl;
         return 1;
+    }
+
+    g_N = size;
+    if (g_N == 4) {
+        g_ROWS = 8;
+        g_COLS = 8;
+        g_TOTAL = 64;
+        g_OUTPUT = "sudoku_samurai_4.json";
+        g_DIFFICULTY = &DIFFICULTY_4;
+    } else {
+        g_ROWS = 21;
+        g_COLS = 21;
+        g_TOTAL = 369;
+        g_OUTPUT = "sudoku_samurai.json";
+        g_DIFFICULTY = &DIFFICULTY_9;
     }
 
     init_layout();
 
-    cout << "Generating " << count_per_level << " puzzles per level (7 levels)..." << endl;
+    int num_levels = (int)g_DIFFICULTY->size();
+    cout << "Samurai " << g_N << "x" << g_N << " (" << g_ROWS << "x" << g_COLS << ", " << g_TOTAL << " cells)" << endl;
+    cout << "Generating " << count_per_level << " puzzles per level (" << num_levels << " levels)..." << endl;
 
-    ofstream out(OUTPUT_FILE);
+    ofstream out(g_OUTPUT);
     out << "{\"puzzles\": [\n";
     int global_id = 1;
     bool first = true;
 
-    for (const auto& kv : DIFFICULTY_LEVELS) {
+    for (const auto& kv : *g_DIFFICULTY) {
         int level = kv.first;
         const Difficulty& info = kv.second;
         cout << "\n--- Level " << level << " (" << info.name << ", target " << info.target_clues << " clues) ---" << endl;
@@ -367,9 +452,9 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < count_per_level; i++) {
             auto start = chrono::high_resolution_clock::now();
             cout << "  #" << global_id << " " << flush;
-            int solution[SAMURAI_ROWS][SAMURAI_COLS];
+            int solution[MAX_ROWS][MAX_COLS];
             generate_full_solution(solution);
-            int puzzle[SAMURAI_ROWS][SAMURAI_COLS];
+            int puzzle[MAX_ROWS][MAX_COLS];
             create_puzzle(solution, puzzle, level);
             auto end = chrono::high_resolution_clock::now();
             chrono::duration<double> elapsed = end - start;
@@ -385,7 +470,7 @@ int main(int argc, char* argv[]) {
             out << "  }";
 
             int clues = 0;
-            for (int k = 0; k < TOTAL_CELLS; k++)
+            for (int k = 0; k < g_TOTAL; k++)
                 if (puzzle[cell_r[k]][cell_c[k]] != 0) clues++;
             cout << " clues=" << clues << " (" << fixed << setprecision(2) << elapsed.count() << "s)" << endl;
             global_id++;
@@ -394,6 +479,6 @@ int main(int argc, char* argv[]) {
 
     out << "\n]}\n";
     out.close();
-    cout << "\nDone! Saved to " << OUTPUT_FILE << endl;
+    cout << "\nDone! Saved to " << g_OUTPUT << endl;
     return 0;
 }
