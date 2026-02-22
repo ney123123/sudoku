@@ -39,13 +39,13 @@ struct Difficulty {
 
 // N=9: 7 levels, 369 cells
 static map<int, Difficulty> DIFFICULTY_9 = {
-    {1, {"Beginner",     320}},
-    {2, {"Easy",         300}},
-    {3, {"Medium",       280}},
-    {4, {"Intermediate", 260}},
-    {5, {"Hard",         240}},
-    {6, {"Expert",       220}},
-    {7, {"Evil",         200}}
+    {1, {"Beginner",     200}},
+    {2, {"Easy",         170}},
+    {3, {"Medium",       150}},
+    {4, {"Intermediate", 140}},
+    {5, {"Hard",         130}},
+    {6, {"Expert",       120}},
+    {7, {"Evil",         110}}
 };
 
 // N=4: 3 levels, 64 cells

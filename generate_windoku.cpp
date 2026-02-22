@@ -35,11 +35,11 @@ struct Difficulty {
 map<int, Difficulty> DIFFICULTY_LEVELS = {
     {1, {"Beginner",     51}},
     {2, {"Easy",         45}},
-    {3, {"Medium",       40}},
-    {4, {"Intermediate", 35}},
-    {5, {"Hard",         31}},
-    {6, {"Expert",       27}},
-    {7, {"Evil",         23}}
+    {3, {"Medium",       35}},
+    {4, {"Intermediate", 30}},
+    {5, {"Hard",         25}},
+    {6, {"Expert",       20}},
+    {7, {"Evil",         15}}
 };
 
 mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());

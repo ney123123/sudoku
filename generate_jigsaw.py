@@ -18,11 +18,11 @@ CELLS = [(r, c) for r in range(SIZE) for c in range(SIZE)]
 MAX_BBOX_DIM = 6
 
 DIFFICULTY_LEVELS = {
-    1: {"name": "Beginner", "clues": 50},
-    2: {"name": "Easy", "clues": 44},
-    3: {"name": "Medium", "clues": 38},
-    4: {"name": "Hard", "clues": 32},
-    5: {"name": "Expert", "clues": 26},
+    1: {"name": "Beginner", "clues": 40},
+    2: {"name": "Easy", "clues": 34},
+    3: {"name": "Medium", "clues": 28},
+    4: {"name": "Hard", "clues": 24},
+    5: {"name": "Expert", "clues": 22},
 }
 
 OUTPUT_FILE = "sudoku_jigsaw.json"

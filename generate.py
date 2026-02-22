@@ -7,13 +7,13 @@ import sys
 import time
 
 DIFFICULTY_LEVELS = {
-    1: {"name": "Beginner", "clues": 51},
-    2: {"name": "Easy", "clues": 45},
-    3: {"name": "Medium", "clues": 40},
-    4: {"name": "Intermediate", "clues": 35},
-    5: {"name": "Hard", "clues": 31},
-    6: {"name": "Expert", "clues": 27},
-    7: {"name": "Evil", "clues": 23},
+    1: {"name": "Beginner", "clues": 45},
+    2: {"name": "Easy", "clues": 40},
+    3: {"name": "Medium", "clues": 33},
+    4: {"name": "Intermediate", "clues": 28},
+    5: {"name": "Hard", "clues": 25},
+    6: {"name": "Expert", "clues": 23},
+    7: {"name": "Evil", "clues": 20},
 }
 
 OUTPUT_FILE = "sudoku.json"
